@@ -1,7 +1,7 @@
 # rm(list = ls())
 # to do gpt research questions
 
-list.of.packages <- c("readxl", "lavaan", "vars", "psychonetrics", "qgraph", "lme4", "semPlot", "tidyverse", "magrittr", "psych", "plyr", "semTools", "careless", "knitr", "kableExtra", "gplots", "naniar", "ggplot2", "gridExtra")
+list.of.packages <- c("readxl", "lavaan", "vars", "psychonetrics", "qgraph", "lme4", "lcmm", "tidyverse", "magrittr", "psych", "plyr", "semTools", "GPArotation", "careless", "knitr", "kableExtra", "gplots", "gridExtra", "naniar", "broom", "ggplot2", "gridExtra")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 
@@ -15,8 +15,8 @@ if (!exists("nBoot")) {
 }
 
 # Define fitmeasures
-if (!exists("fitMeasures")) {
-  fitMeasures <- c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr")
+if (!exists("fitMea")) {
+  fitMea <- c("chisq", "df", "pvalue", "cfi", "tli", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr")
 }
 
 # Load data
@@ -26,18 +26,15 @@ dataList <- list(
   data3 = read_excel("data_3.xlsx")
 )
 
+# Remove completely empty rows from each dataset in dataList
+# dataList <- lapply(dataList, function(df) df[rowSums(is.na(df)) != ncol(df), ])
+
+# Create lookup_table and add numeric_ID to each dataset in dataList
+lookup_table <- unique(unlist(sapply(dataList, `[[`, "ID")))
+dataList <- lapply(dataList, function(df) transform(df, ID = match(ID, lookup_table)))
+
 # Reverse-scaling of items
 reverseItems <- c("stress_4", "stress_5", "stress_7", "stress_8")
-reverseScale <- function(dataset) {
-  for (item in reverseItems) {
-    if (item %in% names(dataset)) {
-      dataset[[item]] <- 4 - dataset[[item]]
-    }
-  }
-  return(dataset)
-}
-
-# Apply the function to each dataset in the list
 dataList <- lapply(dataList, reverseScale)
 
 # Remove participants with gaming time == 0
@@ -70,8 +67,32 @@ dataList <- lapply(dataList, function(data) {
   data$mahalanobis <- mahad(select(data, age:social_support_6),
                             confidence = .99, plot = FALSE)
   
-  # Remove participants who missed both attention checks
-  data <- data %>% filter((control_item_1 == 5 | control_item_2 == 0))
+  # Remove participants who missed both attention checks or 
+  # missed one of the attention checks and was a significant multivariate outlier
+  data <- data %>% filter((control_item_1 == 5 & control_item_2 == 0) | 
+                            (control_item_1 != 5 & mahalanobis > cutoff) |
+                            (control_item_2 != 0 & mahalanobis > cutoff))
+})
+
+# Compute mean scores
+dataList <- lapply(dataList, function(data) {
+  data <- data %>% mutate(
+    igd9sfMeanScore = rowMeans(select(data, igd9sf_1:igd9sf_9), na.rm = TRUE),
+    gdtMeanScore = rowMeans(select(data, gdt_1:gdt_4), na.rm = TRUE),
+    selfAssessmentMeanScore = rowMeans(select(data, selfassessment_1:selfassessment_2), na.rm = TRUE),
+    adhdMeanScore = rowMeans(select(data, adhd_1:adhd_6), na.rm = TRUE),
+    netAddictionMeanScore = rowMeans(select(data, net_addiction_1:net_addiction_6), na.rm = TRUE),
+    socMediaAddictionMeanScore = rowMeans(select(data, soc_media_addiction_1:soc_media_addiction_6), na.rm = TRUE),
+    impulsivityMeanScore = rowMeans(select(data, impulsivity_1:impulsivity_10), na.rm = TRUE),
+    stressMeanScore = rowMeans(select(data, stress_1:stress_10), na.rm = TRUE),
+    aggressionHostilityMeanScore = rowMeans(select(data, aggression_hostility_1:aggression_hostility_6), na.rm = TRUE),
+    escapeMeanScore = rowMeans(select(data, escape_1:escape_4), na.rm = TRUE),
+    socialSupportMeanScore = rowMeans(select(data, social_support_1:social_support_6), na.rm = TRUE),
+    anxietyMeanScore = rowMeans(select(data, anxiety_1:anxiety_2), na.rm = TRUE),
+    depressionMeanScore = rowMeans(select(data, depression_1:depression_2), na.rm = TRUE),
+    socialAnxietyMeanScore = rowMeans(select(data, social_anxiety_1:social_anxiety_3), na.rm = TRUE),
+  )
+  return(data)
 })
 
 # Create factor scores or mean z-scores for variables that are indicated by less than 4 items
@@ -93,57 +114,8 @@ variableList <- list(
   socialAnxiety = c("social_anxiety_1", "social_anxiety_2", "social_anxiety_3")
 )
 
-cfaFunction <- function(data, variableList, boot, fitMeasures) {
-  modelResults <- list()
-  factorScoresData <- data.frame(ID = data$ID)
-  
-  for (variable in variableList) {
-    # Extract the base name of the variable (remove the "_1")
-    variableName <- strsplit(variable[1], "_1")[[1]][1]
-    
-    # Check if the column already exists in the factorScoresData data frame
-    if (paste0(variableName, "_Latent") %in% names(factorScoresData)) {
-      next
-    }
-    
-    if (length(variable) >= 4) {
-      # If the variable is comprised of 4 items or more, perform CFA
-      modelFormula <- paste0(variable[1], "F =~ ", paste(variable, collapse = " + "))
-      
-      fit <- cfa(modelFormula, data,
-                 std.lv = TRUE, mimic = "Mplus", estimator = "MLR", missing = "fiml",
-                 bootstrap = nBoot
-      )
-      
-      factorScores <- as.numeric(lavPredict(fit))
-      factorScoresData <- cbind(factorScoresData, setNames(data.frame(factorScores), paste0(variableName, "_Latent")))
-      
-      modelResults[[variableName]] <- list(
-        summary = summary(fit),
-        fitMeasures = fitmeasures(fit, fitMeasures),
-        factorScores = factorScores
-      )
-    } else {
-      # If the variable is comprised of less than 4 items, compute PCA score
-      pcaResult <- principal(data[variable], nfactors = 1, scores = TRUE)
-      pcaScore <- as.numeric(pcaResult$scores)
-      factorScoresData <- cbind(factorScoresData, setNames(data.frame(pcaScore), paste0(variableName, "_Latent")))
-      
-      modelResults[[variableName]] <- list(
-        summary = NA,
-        fitMeasures = NA,
-        factorScores = pcaScore
-      )
-    }
-  }
-  
-  # Join the original data with the factor scores data
-  data <- left_join(data, factorScoresData, by = "ID")
-  return(list(data = data, modelResults = modelResults))
-}
-
-# Apply the function to each dataset in the list
-results <- lapply(dataList, cfaFunction, variableList = variableList, boot = nBoot, fitMeasures = fitMeasures)
+# For scales within each dataset in the list, compute factor or principal component score
+results <- lapply(dataList, cfaFunction, variableList = variableList, boot = nBoot, fitMeasures = fitMea)
 
 # Extract the data and results lists
 dataList <- lapply(results, `[[`, "data")
@@ -157,39 +129,14 @@ dat <- full_join(dataList$data1, dataList$data2, by = "ID", suffix = c("", ".w2"
 # Long data
 datLong <- bind_rows(dataList) %>% arrange(ID, wave)
 
+# Define gender as factor and define the categories
+dat <- dat %>% 
+  mutate(gender = as.factor(gender)) %>% 
+  filter(gender %in% c(1, 2))
+
 # Delete further unused variables
 delvars <- names(dat) %in% c(
-  
+  "wave", "wave.w2", "wave.w3"
 )
 dat <- dat[!delvars]
 rm(delvars)
-
-##############################
-# Compute mean scores -----------------------------------------------------
-# dataList <- lapply(dataList, function(data) {
-#   data <- data %>% mutate(
-#     gdt = rowMeans(select(data, gdt_1:gdt_4), na.rm = TRUE),
-#     igd9sf = rowMeans(select(data, igd9sf_1:igd9sf_9), na.rm = TRUE),
-#     selfAssessment = rowMeans(select(data, selfassessment_1:selfassessment_2), na.rm = TRUE),
-#     anxiety = rowMeans(select(data, anxiety_1:anxiety_2), na.rm = TRUE),
-#     depression = rowMeans(select(data, depression_1:depression_2), na.rm = TRUE),
-#     socialAnxiety = rowMeans(select(data, social_anxiety_1:social_anxiety_3), na.rm = TRUE),
-#     adhd = rowMeans(select(data, adhd_1:adhd_6), na.rm = TRUE),
-#     netAddiction = rowMeans(select(data, net_addiction_1:net_addiction_6), na.rm = TRUE),
-#     socMediaAddiction = rowMeans(select(data, soc_media_addiction_1:soc_media_addiction_6), na.rm = TRUE),
-#     impulsivity = rowMeans(select(data, impulsivity_1:impulsivity_10), na.rm = TRUE),
-#     stress = rowMeans(select(data, stress_1:stress_10), na.rm = TRUE),
-#     aggressionHostility = rowMeans(select(data, aggression_hostility_1:aggression_hostility_6), na.rm = TRUE),
-#     escape = rowMeans(select(data, escape_1:escape_4), na.rm = TRUE),
-#     socialSupport = rowMeans(select(data, social_support_1:social_support_6), na.rm = TRUE)
-#   )
-#   return(data)
-# })
-
-# gdtModel <- 'gdtF =~ gdt_1 + gdt_2 + gdt_3 + gdt_4'
-# gdtFit <- cfa(gdtModel, data,
-#               std.lv = TRUE, mimic = "Mplus", estimator = "WLSMV",
-#               bootstrap = boot, missing = "pairwise",
-#               ordered = c("gdt_1", "gdt_2", "gdt_3", "gdt_4"))
-# fitmeasures(gdtFit, fitMeasures)
-# data$gdtLatent <- lavPredict(gdtFit)
