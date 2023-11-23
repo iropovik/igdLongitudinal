@@ -29,11 +29,14 @@ nBoot <- 1000
 source("functions.R")
 source("dataWrangling.R")
 
+# Define the number of cores
+cores <- detectCores() - 1
+
 # Variable names
 predictors <- c("adhd_Latent", "net_addiction_Latent", "soc_media_addiction_Latent", 
                 "impulsivity_Latent", "stress_Latent", "aggression_hostility_Latent", 
                 "escape_Latent", "social_support_Latent", "anxiety_Latent", 
-                "depression_Latent", "social_anxiety_Latent")
+                "depression_Latent", "social_anxiety_Latent", "selfesteem_Latent", "education_Latent")
 
 # Create a list of symptom variable names
 symptoms <- list(
@@ -194,15 +197,16 @@ fitResults <- list()
 # Iterate over the gdVarNames
 for (gdVar in gdVarNames) {
   
+  # Apply the primary model for each predictor
   tempResults <- lapply(predictors, function(var) {
     withCallingHandlers({
       igdModel <- paste(' 
         # latent variable
-        iIgd =~ 1*',gdVar,' + 1*',gdVar,'.w2 + 1*',gdVar,'.w3
-        sIgd =~ 0*',gdVar,' + 1*',gdVar,'.w2 + 2*',gdVar,'.w3
+        iIgd =~ 1*', gdVar, ' + 1*', gdVar, '.w2 + 1*', gdVar, '.w3
+        sIgd =~ 0*', gdVar, ' + 1*', gdVar, '.w2 + 2*', gdVar, '.w3
         
-        iPredictor =~ 1*',var,' + 1*',var,'.w2 + 1*',var,'.w3
-        sPredictor =~ 0*',var,' + 1*',var,'.w2 + 2*',var,'.w3
+        iPredictor =~ 1*', var, ' + 1*', var, '.w2 + 1*', var, '.w3
+        sPredictor =~ 0*', var, ' + 1*', var, '.w2 + 2*', var, '.w3
         
         iIgd ~ iPredictor
         sIgd ~ iPredictor + sPredictor
@@ -222,17 +226,27 @@ for (gdVar in gdVarNames) {
         parameterEst = parameterestimates(fitIGD, standardized = TRUE)
       )
     },
-    # If there is an error, switch to the alternative model
+    # Error handling for the primary model
     error = function(e) {
       message(paste("Error in model with gdVar: ", gdVar, " and predictor: ", var, ". Trying alternative model..."))
-      alternative_model(gdVar, var)
+      tryCatch({
+        alternative_model(gdVar, var)
+      }, error = function(e) {
+        message(paste("Error in alternative model with gdVar: ", gdVar, " and predictor: ", var, ". Error message: ", e$message))
+        return(NULL)
+      })
     },
-    # If there is a warning, switch to the alternative model unless the warning message is about empty cases
+    # Warning handling for the primary model
     warning = function(w) {
       if(!grepl("lavaan WARNING: some cases are empty and will be ignored", w$message)) {
         message(paste("Warning in model with gdVar: ", gdVar, " and predictor: ", var, ". Trying alternative model..."))
         invokeRestart("muffleWarning")
-        alternative_model(gdVar, var)
+        tryCatch({
+          alternative_model(gdVar, var)
+        }, error = function(e) {
+          message(paste("Error in alternative model with gdVar: ", gdVar, " and predictor: ", var, ". Error message: ", e$message))
+          return(NULL)
+        })
       }
     })
   })
@@ -241,6 +255,7 @@ for (gdVar in gdVarNames) {
   names(tempResults) <- predictors
   fitResults[[gdVar]] <- tempResults
 }
+
 
 summaryTables <- lapply(fitResults, function(fitResult) {
   map_dfr(fitResult, function(result) {
@@ -386,7 +401,9 @@ gmmResults <- lapply(gdVarNames[-3], function(latentVar) {
   # Perform hlme modeling
   gmm1 <- hlme(as.formula(paste(latentVar, "~ wave")), subject = "ID", random =~ 1 + wave, ng = 1, verbose = FALSE, data = datLong %>% mutate(ID = as.numeric(as.factor(ID)))) 
   gmm2 <- gridsearch(rep = 100, maxiter = 10, minit = gmm1, hlme(as.formula(paste(latentVar, "~ wave")), subject = "ID", random =~ 1 + wave, ng = 2, verbose = FALSE, data = datLong %>% mutate(ID = as.numeric(as.factor(ID))), mixture = ~ wave, nwg = T)) 
-  gmm3 <- gridsearch(rep = 100, maxiter = 10, minit = gmm1, hlme(as.formula(paste(latentVar, "~ wave")), subject = "ID", random =~ 1 + wave, ng = 3, verbose = FALSE, data = datLong %>% mutate(ID = as.numeric(as.factor(ID))), mixture = ~ wave, nwg = T)) 
+  gmm3 <- gridsearch(rep = 100, maxiter = 10, minit = gmm1, hlme(as.formula(paste(latentVar, "~ wave")), subject = "ID", random =~ 1 + wave, ng = 3, verbose = FALSE, data = datLong %>% mutate(ID = as.numeric(as.factor(ID))), mixture = ~ wave, nwg = T))
+  gmm4 <- gridsearch(rep = 100, maxiter = 10, minit = gmm1, hlme(as.formula(paste(latentVar, "~ wave")), subject = "ID", random =~ 1 + wave, ng = 4, verbose = FALSE, data = datLong %>% mutate(ID = as.numeric(as.factor(ID))), mixture = ~ wave, nwg = T)) 
+  
   
   # Extract class memberships (posterior probabilities)
   post_probs_gmm3 <- gmm3$pprob
@@ -398,7 +415,8 @@ gmmResults <- lapply(gdVarNames[-3], function(latentVar) {
     gmm1 = gmm1,
     gmm2 = gmm2,
     gmm3 = gmm3,
-    summaryTable = summarytable(gmm1, gmm2, gmm3),
+    gmm4 = gmm4,
+    summaryTable = summarytable(gmm1, gmm2, gmm3, gmm4),
     postProb = postprob(gmm3, threshold = .5),
     estimates = estimates(gmm3),
     classMembership = classMembershipGmm3 # add class membership to the list returned
@@ -633,7 +651,7 @@ grid.arrange(gdPlots[[1]], gdPlots[[2]], ncol = 2)
 predictorsMeans <- c("adhdMeanScore", "netAddictionMeanScore", "socMediaAddictionMeanScore", 
                 "impulsivityMeanScore", "stressMeanScore", "aggressionHostilityMeanScore", 
                 "escapeMeanScore", "socialSupportMeanScore", "anxietyMeanScore", 
-                "depressionMeanScore", "socialAnxietyMeanScore")
+                "depressionMeanScore", "socialAnxietyMeanScore", "selfesteemMeanScore")
 
 resultsPredictors <- list()
 
@@ -729,7 +747,7 @@ predMeanFitted <- aggregate(fitted_value ~ predictor + wave, data = predFitted, 
 # Create a named vector to map predictors to their names
 predictorsMeansNames <- c("ADHD", "Internet addiction", "Social media addiction", "Impulsivity",
                           "Stress", "Aggression/hostility", "Escape", "Social support", "Anxiety",
-                          "Depression", "Social anxiety")
+                          "Depression", "Social anxiety", "Selfesteem")
 nameMap <- setNames(predictorsMeansNames, predictorsMeans)
 
 # Replace predictor names with their corresponding names in the data
@@ -857,3 +875,9 @@ psychonetricsEstimation <- function(symptom_prefix) {
 }
 # Run the function for each symptom prefix
 psychonetricsModels <- lapply(symptom_prefixes, psychonetricsEstimation)
+
+sessionInfoCurrent <- sessionInfo()
+
+# Save the workspace
+save.image("resultsObjectsIgdLongit.RData")
+

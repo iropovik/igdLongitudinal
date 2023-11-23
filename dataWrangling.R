@@ -1,7 +1,6 @@
 # rm(list = ls())
-# to do gpt research questions
 
-list.of.packages <- c("readxl", "lavaan", "vars", "psychonetrics", "qgraph", "lme4", "lcmm", "tidyverse", "magrittr", "psych", "plyr", "semTools", "GPArotation", "careless", "knitr", "kableExtra", "gplots", "gridExtra", "naniar", "broom", "ggplot2", "gridExtra")
+list.of.packages <- c("readxl", "lavaan", "vars", "psychonetrics", "qgraph", "lme4", "lcmm", "tidyverse", "magrittr", "psych", "plyr", "semTools", "GPArotation", "careless", "knitr", "kableExtra", "gplots", "gridExtra", "naniar", "broom", "ggplot2", "gridExtra", "parallel")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 
@@ -91,6 +90,8 @@ dataList <- lapply(dataList, function(data) {
     anxietyMeanScore = rowMeans(select(data, anxiety_1:anxiety_2), na.rm = TRUE),
     depressionMeanScore = rowMeans(select(data, depression_1:depression_2), na.rm = TRUE),
     socialAnxietyMeanScore = rowMeans(select(data, social_anxiety_1:social_anxiety_3), na.rm = TRUE),
+    selfesteemMeanScore = selfesteem,
+    educationMeanScore = education
   )
   return(data)
 })
@@ -111,7 +112,9 @@ variableList <- list(
   selfAssessment = c("selfassessment_1", "selfassessment_2"),
   anxiety = c("anxiety_1", "anxiety_2"),
   depression = c("depression_1", "depression_2"),
-  socialAnxiety = c("social_anxiety_1", "social_anxiety_2", "social_anxiety_3")
+  socialAnxiety = c("social_anxiety_1", "social_anxiety_2", "social_anxiety_3"),
+  selfesteem = "selfesteem",
+  education = "education"
 )
 
 # For scales within each dataset in the list, compute factor or principal component score
