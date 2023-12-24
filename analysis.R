@@ -1,6 +1,6 @@
 #' ---
-#' title: "Longitudinal study of risk and protective factors for gaming disorder"
-#' author: "Ivan Ropovik"
+#' title: "Appendix A. Analysis outputs for paper Development of Gaming Disorder: Underlying Risk Factors and Complex Temporal Dynamics"
+#' author: "Marcel Martončik, Ivan Ropovik, Matúš Adamkovič"
 #' date: "`r Sys.Date()`"
 #' output:
 #'    html_document:
@@ -12,12 +12,6 @@
 #' ---
 #+ setup, include = FALSE
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, fig.align = "center")
-rm(list = ls())
-
-# TODO Qs
-# Zatial nevieme: Cross-Lagged Panel Analysis: How do the variables influence each other over time? For example, does impulsivity at wave 1 predict IGD symptoms at wave 2, controlling for IGD symptoms at wave 1?
-# Check velke kovariancie pri b-ss networku
-# lvnet package <-  tam su definovane nazvy matrixov
 
 # Define fitmeasures
 fitMea <- c("chisq.scaled", "df.scaled", "pvalue.scaled", "cfi.scaled", "tli.scaled", "rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "srmr")
@@ -199,55 +193,42 @@ for (gdVar in gdVarNames) {
   
   # Apply the primary model for each predictor
   tempResults <- lapply(predictors, function(var) {
-    withCallingHandlers({
-      igdModel <- paste(' 
-        # latent variable
-        iIgd =~ 1*', gdVar, ' + 1*', gdVar, '.w2 + 1*', gdVar, '.w3
-        sIgd =~ 0*', gdVar, ' + 1*', gdVar, '.w2 + 2*', gdVar, '.w3
+    tryCatch({
+      withCallingHandlers({
+        igdModel <- paste(' 
+          # latent variable
+          iIgd =~ 1*', gdVar, ' + 1*', gdVar, '.w2 + 1*', gdVar, '.w3
+          sIgd =~ 0*', gdVar, ' + 1*', gdVar, '.w2 + 2*', gdVar, '.w3
+          
+          iPredictor =~ 1*', var, ' + 1*', var, '.w2 + 1*', var, '.w3
+          sPredictor =~ 0*', var, ' + 1*', var, '.w2 + 2*', var, '.w3
+          
+          iIgd ~ iPredictor
+          sIgd ~ iPredictor + sPredictor
+          
+          iIgd ~~ sIgd
+          iPredictor ~~ sPredictor
+        ', collapse = "")
         
-        iPredictor =~ 1*', var, ' + 1*', var, '.w2 + 1*', var, '.w3
-        sPredictor =~ 0*', var, ' + 1*', var, '.w2 + 2*', var, '.w3
+        # Fit the primary model
+        fitIGD <- growth(igdModel, data = dat, missing = "fiml", mimic = "Mplus", estimator = "MLR", se = "robust",
+                         bootstrap = nBoot, optim.method = "BFGS")
         
-        iIgd ~ iPredictor
-        sIgd ~ iPredictor + sPredictor
-        
-        iIgd ~~ sIgd
-        iPredictor ~~ sPredictor
-      ', collapse = "")
-      
-      # Fit the primary model
-      fitIGD <- growth(igdModel, data = dat, missing = "fiml", mimic = "Mplus", estimator = "MLR", se = "robust",
-                       bootstrap = nBoot, optim.method = "BFGS")
-      
-      # Return the results of the primary model
-      list(
-        summary = summary(fitIGD, standardized = TRUE),
-        fitMeasures = fitmeasures(fitIGD, fitMea),
-        parameterEst = parameterestimates(fitIGD, standardized = TRUE)
-      )
-    },
-    # Error handling for the primary model
-    error = function(e) {
-      message(paste("Error in model with gdVar: ", gdVar, " and predictor: ", var, ". Trying alternative model..."))
-      tryCatch({
-        alternative_model(gdVar, var)
-      }, error = function(e) {
-        message(paste("Error in alternative model with gdVar: ", gdVar, " and predictor: ", var, ". Error message: ", e$message))
-        return(NULL)
+        # Return the results of the primary model
+        list(
+          summary = summary(fitIGD, standardized = TRUE),
+          fitMeasures = fitmeasures(fitIGD, fitMea),
+          parameterEst = parameterestimates(fitIGD, standardized = TRUE)
+        )
+      }, warning = function(w) {
+        if(!grepl("lavaan WARNING: some cases are empty and will be ignored", w$message)) {
+          message(paste("Warning in model with gdVar: ", gdVar, " and predictor: ", var, ". Warning message: ", w$message))
+          invokeRestart("muffleWarning")
+        }
       })
-    },
-    # Warning handling for the primary model
-    warning = function(w) {
-      if(!grepl("lavaan WARNING: some cases are empty and will be ignored", w$message)) {
-        message(paste("Warning in model with gdVar: ", gdVar, " and predictor: ", var, ". Trying alternative model..."))
-        invokeRestart("muffleWarning")
-        tryCatch({
-          alternative_model(gdVar, var)
-        }, error = function(e) {
-          message(paste("Error in alternative model with gdVar: ", gdVar, " and predictor: ", var, ". Error message: ", e$message))
-          return(NULL)
-        })
-      }
+    }, error = function(e) {
+      message(paste("Error in model with gdVar: ", gdVar, " and predictor: ", var, ". Skipping this model due to non-convergence. Error message: ", e$message))
+      return(NULL)  # Return NULL for this predictor, skipping it
     })
   })
   
@@ -256,19 +237,22 @@ for (gdVar in gdVarNames) {
   fitResults[[gdVar]] <- tempResults
 }
 
-
 summaryTables <- lapply(fitResults, function(fitResult) {
   map_dfr(fitResult, function(result) {
     if (is.null(result) || !is.list(result)) {
-      return(setNames(data.frame(rep(NA, 14)), c("chisq.scaled", "df.scaled", "pvalue.scaled", "cfi.scaled", "tli.scaled", "rmsea.scaled", "srmr", "iIgd_iPred", "sIgd_iPred", "sIgd_sPred", "iIgd_iPredP", "sIgd_iPredP", "sIgd_sPredP", "iIgd_iPredP_adj")))
+      return(setNames(data.frame(matrix(rep(NA, 14), ncol = 14)), 
+                      c("chiSq", "df", "pvalue", "CFI", "TLI", "RMSEA", "SRMR", 
+                        "iIgd_iPred", "sIgd_iPred", "sIgd_sPred", 
+                        "iIgd_iPredP", "sIgd_iPredP", "sIgd_sPredP", "iIgd_iPredP_adj")))
     }
     
     fitIndices <- result$fitMeasures
     parameters <- result$parameterEst
     
+    # Extracting p-values and adjusting for multiple comparisons
     iIgd_iPredP <- parameters$pvalue[parameters$lhs == "iIgd" & parameters$rhs == "iPredictor"]
     sIgd_iPredP <- parameters$pvalue[parameters$lhs == "sIgd" & parameters$rhs == "iPredictor"]
-    sIgd_sPredP <- ifelse(length(parameters$pvalue[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"]) > 0, parameters$pvalue[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"], NA)
+    sIgd_sPredP <- parameters$pvalue[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"]
     
     data.frame(
       chiSq = fitIndices["chisq.scaled"],
@@ -280,7 +264,7 @@ summaryTables <- lapply(fitResults, function(fitResult) {
       SRMR = fitIndices["srmr"],
       iIgd_iPred = parameters$std.all[parameters$lhs == "iIgd" & parameters$rhs == "iPredictor"],
       sIgd_iPred = parameters$std.all[parameters$lhs == "sIgd" & parameters$rhs == "iPredictor"],
-      sIgd_sPred = ifelse(length(parameters$std.all[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"]) > 0, parameters$std.all[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"], NA),
+      sIgd_sPred = parameters$std.all[parameters$lhs == "sIgd" & parameters$rhs == "sPredictor"],
       iIgd_iPredP = iIgd_iPredP,
       sIgd_iPredP = sIgd_iPredP,
       sIgd_sPredP = sIgd_sPredP,
@@ -290,6 +274,7 @@ summaryTables <- lapply(fitResults, function(fitResult) {
     )
   }, .id = "Variable") %>% remove_rownames()
 })
+
 
 # Add the variable names from the original list to the summary tables
 names(summaryTables) <- names(fitResults)
@@ -823,8 +808,6 @@ psychonetricsEstimation <- function(symptom_prefix) {
   (temporal <- temporalCov <- getmatrix(modelPruned, "PDC"))
   (contemporaneous <- contemporaneousCov <- getmatrix(modelPruned, "omega_zeta_within"))
   (between <- betweenCov <- getmatrix(modelPruned, "omega_zeta_between"))
-
-  # (between <- betweenCov <- getmatrix(modelPruned, "lowertri_epsilon_between"))
   
   # Plot networks
   layout(t(1:3))
@@ -858,7 +841,7 @@ psychonetricsEstimation <- function(symptom_prefix) {
   betweenCor <- cov2cor(getmatrix(modelPruned, "omega_zeta_between"))
   betweenCov[lower.tri(betweenCov)] <- betweenCor[lower.tri(betweenCor)]
   betweenMat <- round_df(as.data.frame(betweenCov), 3)
-
+  
   # Save the results
   psychonetricsResults[[symptom_prefix]] <<- list(
     model = model,
@@ -876,7 +859,7 @@ psychonetricsEstimation <- function(symptom_prefix) {
 # Run the function for each symptom prefix
 psychonetricsModels <- lapply(symptom_prefixes, psychonetricsEstimation)
 
-sessionInfoCurrent <- sessionInfo()
+(sessionInfoCurrent <- sessionInfo())
 
 # Save the workspace
 save.image("resultsObjectsIgdLongit.RData")
